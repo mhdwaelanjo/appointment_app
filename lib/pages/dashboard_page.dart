@@ -51,8 +51,67 @@ class DashboardPage extends GetView<AppointmentController> {
                   controller.selectedDate.value = normalized;
                   _showDayAppointments(context, normalized);
                 },
+                locale: Localizations.localeOf(context).toString(),
                 eventLoader: (day) => controller.appointmentsForDate(day),
                 headerStyle: const HeaderStyle(formatButtonVisible: false),
+                calendarBuilders: CalendarBuilders(
+                  todayBuilder: (context, day, focusedDay) {
+                    return Container(
+                      margin: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${day.day}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    );
+                  },
+                  selectedBuilder: (context, day, focusedDay) {
+                    return Container(
+                      margin: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.teal,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${day.day}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    );
+                  },
+                  markerBuilder: (context, day, events) {
+                    if (events.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+
+                    return Align(
+                      alignment: Alignment.bottomRight,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        margin: const EdgeInsets.only(right: 2, bottom: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.lightBlue,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        constraints: const BoxConstraints(minWidth: 16, minHeight: 14),
+                        child: Text(
+                          '${events.length}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            height: 1,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
                 calendarStyle: const CalendarStyle(
                   markerDecoration: BoxDecoration(
                     color: Colors.teal,
@@ -190,9 +249,7 @@ class DashboardPage extends GetView<AppointmentController> {
                     (closure) => ListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
-                      title: Text(
-                        '${_fmt(context, closure.range.start)} - ${_fmt(context, closure.range.end)}',
-                      ),
+                      title: Text(_closureLabel(context, closure.range)),
                       subtitle: closure.reason.isEmpty ? null : Text(closure.reason),
                       trailing: IconButton(
                         onPressed: () => controller.removeTemporaryClosure(closure.id),
@@ -285,10 +342,60 @@ class DashboardPage extends GetView<AppointmentController> {
       return;
     }
 
-    controller.addBreak(weekday, TimeRange(start: start, end: end));
+    final error = controller.addBreak(weekday, TimeRange(start: start, end: end));
+    if (error != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+    }
   }
 
   Future<void> _addClosure(BuildContext context, DateTime date) async {
+    final mode = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.event_busy),
+                title: const Text('Full day closure'),
+                subtitle: const Text('Disable bookings for the whole day.'),
+                onTap: () => Navigator.of(context).pop('full_day'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.schedule),
+                title: const Text('By hours'),
+                subtitle: const Text('Disable bookings for a selected time range.'),
+                onTap: () => Navigator.of(context).pop('by_hours'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (mode == null || !context.mounted) {
+      return;
+    }
+
+    if (mode == 'full_day') {
+      final error = controller.addTemporaryClosure(
+        date,
+        TimeRange(
+          start: const TimeOfDay(hour: 0, minute: 0),
+          end: const TimeOfDay(hour: 23, minute: 59),
+        ),
+        reason: 'Full day closure',
+      );
+
+      if (error != null && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+      }
+
+      return;
+    }
+
     final start = await showTimePicker(
       context: context,
       initialTime: const TimeOfDay(hour: 9, minute: 0),
@@ -307,11 +414,15 @@ class DashboardPage extends GetView<AppointmentController> {
       return;
     }
 
-    controller.addTemporaryClosure(
+    final error = controller.addTemporaryClosure(
       date,
       TimeRange(start: start, end: end),
       reason: 'Temporary closure',
     );
+
+    if (error != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+    }
   }
 
   Future<void> _showDayAppointments(BuildContext context, DateTime date) async {
@@ -367,5 +478,19 @@ class DashboardPage extends GetView<AppointmentController> {
 
   String _fmt(BuildContext context, TimeOfDay value) {
     return MaterialLocalizations.of(context).formatTimeOfDay(value);
+  }
+
+  String _closureLabel(BuildContext context, TimeRange range) {
+    if (_isFullDayRange(range)) {
+      return 'Full day closure';
+    }
+
+    return '${_fmt(context, range.start)} - ${_fmt(context, range.end)}';
+  }
+
+  bool _isFullDayRange(TimeRange range) {
+    final startsAtMidnight = range.start.hour == 0 && range.start.minute == 0;
+    final endsNearMidnight = range.end.hour == 23 && range.end.minute == 59;
+    return startsAtMidnight && endsNearMidnight;
   }
 }

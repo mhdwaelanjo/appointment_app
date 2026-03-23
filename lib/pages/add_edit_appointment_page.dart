@@ -101,7 +101,8 @@ class _AddEditAppointmentPageState extends State<AddEditAppointmentPage> {
               subtitle: Text(DateFormat('EEE, dd MMM yyyy').format(_date)),
               trailing: const Icon(Icons.calendar_today),
               onTap: () async {
-                final firstDate = DateTime.now().subtract(const Duration(days: 365));
+                final now = DateTime.now();
+                final firstDate = DateTime(now.year, now.month, now.day);
                 final lastDate = DateTime.now().add(const Duration(days: 365 * 2));
                 final initialDate = _resolveInitialDateForPicker(
                   preferred: _date,
@@ -294,6 +295,13 @@ class _AddEditAppointmentPageState extends State<AddEditAppointmentPage> {
       if (DateUtils.isSameDay(normalizedDate, editingDate)) {
         return true;
       }
+    }
+
+    final hasClosure = _controller.temporaryClosures.any((closure) {
+      return DateUtils.isSameDay(closure.date, normalizedDate);
+    });
+    if (hasClosure) {
+      return false;
     }
 
     final slots = _controller.generateAvailableSlots(

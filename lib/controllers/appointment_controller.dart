@@ -228,14 +228,20 @@ class AppointmentController extends GetxController {
     workingDays[weekday] = updated;
   }
 
-  void addBreak(int weekday, TimeRange range) {
+  String? addBreak(int weekday, TimeRange range) {
     if (!range.isValid()) {
-      return;
+      return 'Break time range is invalid.';
     }
 
     final dayBreaks = List<TimeRange>.from(breaksByWeekday[weekday] ?? []);
+    final hasOverlap = dayBreaks.any((existing) => _timeRangesOverlap(existing, range));
+    if (hasOverlap) {
+      return 'This break overlaps an existing break.';
+    }
+
     dayBreaks.add(range);
     breaksByWeekday[weekday] = dayBreaks;
+    return null;
   }
 
   void removeBreak(int weekday, int index) {
@@ -248,19 +254,38 @@ class AppointmentController extends GetxController {
     breaksByWeekday[weekday] = dayBreaks;
   }
 
-  void addTemporaryClosure(DateTime date, TimeRange range, {String reason = ''}) {
+  String? addTemporaryClosure(DateTime date, TimeRange range, {String reason = ''}) {
     if (!range.isValid()) {
-      return;
+      return 'Closure time range is invalid.';
+    }
+
+    final closureDate = DateTime(date.year, date.month, date.day);
+    final closuresForDay = temporaryClosures.where((closure) => _isSameDate(closure.date, closureDate)).toList();
+
+    if (_isFullDayRange(range) && closuresForDay.isNotEmpty) {
+      return 'A closure already exists on this date.';
+    }
+
+    final hasFullDayClosure = closuresForDay.any((closure) => _isFullDayRange(closure.range));
+    if (hasFullDayClosure) {
+      return 'A full day closure already exists on this date.';
+    }
+
+    final hasOverlap = closuresForDay.any((closure) => _timeRangesOverlap(closure.range, range));
+    if (hasOverlap) {
+      return 'This closure overlaps an existing closure.';
     }
 
     temporaryClosures.add(
       TemporaryClosure(
         id: 'CLS-${DateTime.now().millisecondsSinceEpoch}',
-        date: DateTime(date.year, date.month, date.day),
+        date: closureDate,
         range: range,
         reason: reason,
       ),
     );
+
+    return null;
   }
 
   void removeTemporaryClosure(String id) {
@@ -368,6 +393,20 @@ class AppointmentController extends GetxController {
     DateTime endB,
   ) {
     return startA.isBefore(endB) && startB.isBefore(endA);
+  }
+
+  bool _timeRangesOverlap(TimeRange left, TimeRange right) {
+    final leftStart = TimeRange.toMinutes(left.start);
+    final leftEnd = TimeRange.toMinutes(left.end);
+    final rightStart = TimeRange.toMinutes(right.start);
+    final rightEnd = TimeRange.toMinutes(right.end);
+    return leftStart < rightEnd && rightStart < leftEnd;
+  }
+
+  bool _isFullDayRange(TimeRange range) {
+    final startsAtMidnight = range.start.hour == 0 && range.start.minute == 0;
+    final endsNearMidnight = range.end.hour == 23 && range.end.minute == 59;
+    return startsAtMidnight && endsNearMidnight;
   }
 
   int _timeToMinutes(TimeOfDay value) => (value.hour * 60) + value.minute;
