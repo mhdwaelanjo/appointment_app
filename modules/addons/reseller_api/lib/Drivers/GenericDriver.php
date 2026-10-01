@@ -1,6 +1,8 @@
 <?php
 namespace WHMCS\Module\Addon\ResellerApi\Drivers;
 
+use WHMCS\Database\Capsule;
+
 class GenericDriver implements DriverInterface
 {
     public function capabilities(): array
@@ -10,12 +12,40 @@ class GenericDriver implements DriverInterface
 
     public function status($serviceId): array
     {
-        return ['service_status' => 'unknown', 'power_state' => 'unknown'];
+        $s = Capsule::table('tblhosting')->where('id', $serviceId)->first();
+        return [
+            'service_status' => strtolower($s->domainstatus),
+            'power_state' => 'unknown',
+            'uptime_seconds' => null,
+            'backend' => null
+        ];
     }
 
     public function power($serviceId, $action): array
     {
-        throw new \Exception('ACTION_NOT_SUPPORTED');
+        $actionMap = [
+            'start' => 'start',
+            'stop' => 'stop',
+            'reboot' => 'reboot',
+            'shutdown' => 'shutdown',
+            'reset' => 'reset'
+        ];
+
+        if (!isset($actionMap[$action])) {
+             throw new \Exception('ACTION_NOT_SUPPORTED');
+        }
+
+        // Use ModuleCustom to call the mapped action if it exists on the module
+        $res = \localAPI('ModuleCustom', [
+            'accountid' => $serviceId,
+            'func_name' => $actionMap[$action]
+        ], 'Reseller API System');
+
+        if ($res['result'] !== 'success') {
+            throw new \Exception('ACTION_NOT_SUPPORTED');
+        }
+
+        return ['result' => 'success'];
     }
 
     public function console($serviceId, $type): array
@@ -25,8 +55,11 @@ class GenericDriver implements DriverInterface
 
     public function sso($serviceId, $target): array
     {
-        // Typically call ModuleServiceSingleSignOn via localAPI in WHMCS
-        throw new \Exception('ACTION_NOT_SUPPORTED');
+        $res = \localAPI('ModuleServiceSingleSignOn', ['serviceid' => $serviceId], 'Reseller API System');
+        if ($res['result'] !== 'success') {
+             throw new \Exception('ACTION_NOT_SUPPORTED');
+        }
+        return ['url' => $res['redirectTo']];
     }
 
     public function rebuild($serviceId, $template, $password, $sshKeys): array
@@ -36,7 +69,19 @@ class GenericDriver implements DriverInterface
 
     public function ips($serviceId): array
     {
-        return [];
+        $s = Capsule::table('tblhosting')->where('id', $serviceId)->first();
+        $ips = [];
+        if ($s->dedicatedip) {
+            $ips[] = ['ip' => $s->dedicatedip, 'version' => (strpos($s->dedicatedip, ':') !== false ? 6 : 4), 'primary' => true];
+        }
+        if ($s->assignedips) {
+            $assigned = explode("\n", trim($s->assignedips));
+            foreach ($assigned as $ip) {
+                 $ip = trim($ip);
+                 if ($ip) $ips[] = ['ip' => $ip, 'version' => (strpos($ip, ':') !== false ? 6 : 4), 'primary' => false];
+            }
+        }
+        return $ips;
     }
 
     public function setRdns($serviceId, $ip, $rdns): array
@@ -71,7 +116,12 @@ class GenericDriver implements DriverInterface
 
     public function usage($serviceId, $period): array
     {
-        // Try UpdateClientProductUsage in real impl
-        return [];
+        $res = \localAPI('UpdateClientProductUsage', ['serviceid' => $serviceId], 'Reseller API System');
+        $s = Capsule::table('tblhosting')->where('id', $serviceId)->first();
+
+        return [
+            'disk' => ['used_mb' => $s->diskusage, 'limit_mb' => $s->disklimit],
+            'bandwidth' => ['used_gb' => $s->bwusage, 'limit_gb' => $s->bwlimit]
+        ];
     }
 }

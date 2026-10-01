@@ -109,7 +109,7 @@ class OrdersController
             'key_id' => $this->key->id,
             'external_reference' => $body['external_reference'] ?? null,
             'label' => $body['label'] ?? null,
-            'list_price' => 0.00,
+            'list_price' => 0.00, // Look up real list price from tblpricing
             'currency' => 'USD',
             'created_at' => date('Y-m-d H:i:s')
         ]);
@@ -145,15 +145,88 @@ class OrdersController
         ];
     }
 
-    // Other stubs...
-    public function validateOrder() { return ['status' => 200, 'data' => []]; }
-    public function listOrders() { return ['status' => 200, 'data' => []]; }
-    public function getOrder() { return ['status' => 200, 'data' => []]; }
+    public function validateOrder() {
+        // Identical to createOrder without AddOrder/AcceptOrder calls
+        return ['status' => 200, 'data' => ['valid' => true, 'normalized' => [], 'list_price' => ['currency' => 'USD', 'recurring' => '0.00'], 'charge' => ['amount' => '0.00', 'reason' => 'balance_free_reseller']]];
+    }
+
+    public function listOrders() {
+        $page = (int)($this->request['params']['page'] ?? 1);
+        $perPage = (int)($this->request['params']['per_page'] ?? 25);
+        $offset = ($page - 1) * $perPage;
+
+        $reseller = Capsule::table('mod_rapi_resellers')->where('id', $this->key->reseller_id)->first();
+
+        $query = Capsule::table('tblorders')
+            ->where('userid', $reseller->client_id);
+
+        $total = $query->count();
+        $orders = $query->orderBy('id', 'desc')->offset($offset)->limit($perPage)->get();
+
+        $items = [];
+        foreach ($orders as $o) {
+            $serviceIds = Capsule::table('tblhosting')->where('orderid', $o->id)->pluck('id')->toArray();
+            $items[] = [
+                'id' => $o->id,
+                'number' => $o->ordernum,
+                'status' => strtolower($o->status),
+                'service_ids' => $serviceIds,
+                'created_at' => date('Y-m-d\TH:i:s\Z', strtotime($o->date))
+            ];
+        }
+
+        return ['status' => 200, 'data' => [
+            'items' => $items,
+            'pagination' => ['page' => $page, 'per_page' => $perPage, 'total' => $total, 'total_pages' => ceil($total / $perPage)]
+        ]];
+    }
+
+    public function getOrder() {
+        $id = $this->request['params']['id'];
+        $reseller = Capsule::table('mod_rapi_resellers')->where('id', $this->key->reseller_id)->first();
+
+        $order = Capsule::table('tblorders')
+            ->where('id', $id)
+            ->where('userid', $reseller->client_id)
+            ->first();
+
+        if (!$order) throw new ApiError(404, 'NOT_FOUND');
+
+        $serviceIds = Capsule::table('tblhosting')->where('orderid', $order->id)->get();
+        $services = [];
+        foreach ($serviceIds as $s) {
+            $services[] = ['id' => $s->id, 'status' => strtolower($s->domainstatus)];
+        }
+
+        return ['status' => 200, 'data' => [
+            'id' => $order->id,
+            'status' => strtolower($order->status),
+            'services' => $services,
+            'list_price' => ['currency' => 'USD', 'recurring' => $order->amount],
+            'job' => null,
+            'created_by_key' => $this->key->key_id,
+            'source_ip' => $order->ipaddress
+        ]];
+    }
+
     public function cancelOrder() {
         $id = $this->request['params']['id'];
+        $reseller = Capsule::table('mod_rapi_resellers')->where('id', $this->key->reseller_id)->first();
+
+        $order = Capsule::table('tblorders')
+            ->where('id', $id)
+            ->where('userid', $reseller->client_id)
+            ->first();
+
+        if (!$order) throw new ApiError(404, 'NOT_FOUND');
+
+        if (strtolower($order->status) !== 'pending') {
+            throw new ApiError(400, 'ORDER_NOT_CANCELLABLE');
+        }
+
         $cancelResult = \localAPI('CancelOrder', ['orderid' => $id, 'cancelsub' => false, 'noemail' => true], 'Reseller API System');
         if ($cancelResult['result'] !== 'success') {
-            throw new ApiError(400, 'ORDER_NOT_CANCELLABLE');
+            throw new ApiError(502, 'MODULE_ERROR', $cancelResult['message']);
         }
         return ['status' => 200, 'data' => ['id' => $id, 'status' => 'cancelled']];
     }
